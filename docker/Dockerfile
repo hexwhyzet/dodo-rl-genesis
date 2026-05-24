@@ -36,8 +36,8 @@ RUN wget -q https://download.nomachine.com/download/8.14/Linux/nomachine_8.14.2_
     && rm /tmp/nomachine.deb
 
 # Install Claude Code (standalone, no Node.js required)
-RUN curl -fsSL https://claude.ai/install.sh | sh \
-    && echo 'export PATH="$HOME/.claude/bin:$PATH"' >> /root/.bashrc
+RUN curl -fsSL https://claude.ai/install.sh | bash
+RUN echo 'export PATH="$HOME/.claude/bin:$PATH"' >> /root/.bashrc
 
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
