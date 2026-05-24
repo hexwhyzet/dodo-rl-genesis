@@ -119,7 +119,7 @@ def get_cfgs():
             "fall_penalty":       -10.0,   # penalty on termination
             "unallowed_contacts": -1.0,    # non-foot link touches ground
             "lin_vel_z":          -1.0,    # penalize vertical body movement
-            "base_ang_vel":       -0.5,    # penalize body rotation
+            "base_ang_vel":       -2.0,    # penalize body rotation
             "action_rate":        -0.05,   # penalize action changes (10x stronger)
             "dof_acc":            -1e-6,   # penalize joint accelerations (4x stronger)
             "torques":            -2e-4,   # penalize motor effort (2x stronger)
