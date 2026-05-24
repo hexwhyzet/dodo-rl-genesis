@@ -1,0 +1,22 @@
+{
+  "name": "dodo-rl-genesis",
+  "dockerFile": "../docker/Dockerfile",
+  "runArgs": ["--gpus", "all"],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.pylance",
+        "ms-toolsai.jupyter"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/opt/conda/bin/python"
+      }
+    }
+  },
+  "mounts": [
+    "source=${localWorkspaceFolder}/checkpoints,target=/workspace/checkpoints,type=bind",
+    "source=${localWorkspaceFolder}/runs,target=/workspace/runs,type=bind"
+  ],
+  "workspaceFolder": "/workspace"
+}

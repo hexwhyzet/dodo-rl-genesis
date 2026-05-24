@@ -1,0 +1,6 @@
+genesis-world
+torch>=2.3.0
+numpy>=1.24
+tensordict
+rsl-rl-lib>=5.0.0
+tensorboard

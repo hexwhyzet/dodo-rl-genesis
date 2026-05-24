@@ -1,0 +1,27 @@
+version: "3.8"
+
+services:
+  train:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: dodo-rl-genesis:latest
+    volumes:
+      - ../checkpoints:/workspace/checkpoints
+      - ../runs:/workspace/runs
+      - ../configs:/workspace/configs
+    environment:
+      - WANDB_API_KEY=${WANDB_API_KEY:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ports:
+      - "4000:4000"   # NoMachine NX
+      - "5900:5900"   # VNC
+    command: ["bash"]
+    stdin_open: true
+    tty: true

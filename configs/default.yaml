@@ -1,0 +1,23 @@
+# @package _global_
+
+project: dodo-rl-genesis
+run_name: ppo_default
+
+env:
+  show_viewer: false
+
+trainer:
+  policy: MlpPolicy
+  total_timesteps: 1_000_000
+  save_freq: 10_000
+  run_dir: runs/${run_name}
+  checkpoint_dir: checkpoints/${run_name}
+  ppo_kwargs:
+    learning_rate: 3.0e-4
+    n_steps: 2048
+    batch_size: 64
+    n_epochs: 10
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_range: 0.2
+    ent_coef: 0.0

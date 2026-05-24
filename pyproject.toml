@@ -1,0 +1,31 @@
+[project]
+name = "dodo-rl-genesis"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.3.0",
+    "torchvision",
+    "genesis-world",
+    "tensordict",
+    "rsl-rl-lib>=5.0.0",
+    "tensorboard",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ipython",
+    "ipdb",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[dependency-groups]
+dev = [
+    "ipython",
+    "ipdb",
+]
