@@ -1,4 +1,6 @@
-DOCKER_IMAGE ?= ultravanish/dodo-rl-genesis:latest
+DOCKER_REPO  ?= ultravanish/dodo-rl-genesis
+VERSION      ?= latest
+DOCKER_IMAGE  = $(DOCKER_REPO):$(VERSION)
 
 .PHONY: install assets train-local train eval tensorboard lint docker-build docker-push
 
@@ -39,6 +41,8 @@ lint:
 
 docker-build:
 	docker build -f docker/Dockerfile -t $(DOCKER_IMAGE) .
+	$(if $(filter-out latest,$(VERSION)),docker tag $(DOCKER_IMAGE) $(DOCKER_REPO):latest)
 
 docker-push:
 	docker push $(DOCKER_IMAGE)
+	$(if $(filter-out latest,$(VERSION)),docker push $(DOCKER_REPO):latest)
