@@ -5,6 +5,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    openssh-client \
     git \
     curl \
     tmux \
@@ -13,13 +14,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
-
-COPY pyproject.toml requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
-RUN pip install --no-cache-dir --no-deps -e .
-
-EXPOSE 8080 6006
 
 CMD ["sleep", "infinity"]
