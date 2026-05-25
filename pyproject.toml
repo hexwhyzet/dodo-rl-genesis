@@ -3,8 +3,8 @@ name = "dodo-rl-genesis"
 version = "0.1.0"
 requires-python = "==3.11.*"
 dependencies = [
-    "torch==2.3.0",
-    "torchvision==0.18.0",
+    "torch==2.6.0",
+    "torchvision==0.21.0",
     "genesis-world",
     "tensordict",
     "rsl-rl-lib>=5.0.0",
@@ -19,13 +19,13 @@ dev = [
 ]
 
 [[tool.uv.index]]
-name = "pytorch-cu121"
-url = "https://download.pytorch.org/whl/cu121"
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
 explicit = true
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu121" }
-torchvision = { index = "pytorch-cu121" }
+torch = { index = "pytorch-cu124" }
+torchvision = { index = "pytorch-cu124" }
 
 [build-system]
 requires = ["setuptools>=68"]
