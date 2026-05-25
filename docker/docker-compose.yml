@@ -22,6 +22,7 @@ services:
     ports:
       - "4000:4000"   # NoMachine NX
       - "5900:5900"   # VNC
+      - "6006:6006"   # TensorBoard
     command: ["bash"]
     stdin_open: true
     tty: true
