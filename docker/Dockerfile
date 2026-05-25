@@ -22,4 +22,4 @@ RUN pip install --no-cache-dir --no-deps -e .
 
 EXPOSE 8080 6006
 
-CMD ["bash"]
+CMD ["sleep", "infinity"]
