@@ -1,5 +1,6 @@
 """Minimal HTTP server serving the training monitor UI and recorded videos."""
 import json
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -34,12 +35,44 @@ class _Handler(BaseHTTPRequestHandler):
             filename = path[len("/videos/"):]
             filepath = self.video_dir / filename
             if filepath.exists() and filepath.suffix == ".mp4":
-                self._send_file(filepath, "video/mp4")
+                self._send_video(filepath)
             else:
                 self._respond(404, "text/plain", b"not found")
 
         else:
             self._respond(404, "text/plain", b"not found")
+
+    def _send_video(self, filepath: Path):
+        size = filepath.stat().st_size
+        range_header = self.headers.get("Range")
+
+        if range_header:
+            start, end = range_header.replace("bytes=", "").split("-")
+            start = int(start)
+            end = int(end) if end else size - 1
+            length = end - start + 1
+
+            self.send_response(206)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.send_header("Content-Length", str(length))
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+
+            with open(filepath, "rb") as f:
+                f.seek(start)
+                self.wfile.write(f.read(length))
+        else:
+            self.send_response(200)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Length", str(size))
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+
+            with open(filepath, "rb") as f:
+                self.wfile.write(f.read())
 
     def _send_file(self, filepath: Path, content_type: str):
         data = filepath.read_bytes()

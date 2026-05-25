@@ -151,11 +151,13 @@ function playIter(key) {
   if (g.front) {
     const v = document.getElementById('video-front');
     v.src = '/videos/' + g.front;
+    v.load();
     v.play().catch(() => {});
   }
   if (g.side) {
     const v = document.getElementById('video-side');
     v.src = '/videos/' + g.side;
+    v.load();
     v.play().catch(() => {});
   }
 
