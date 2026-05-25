@@ -4,3 +4,4 @@ numpy>=1.24
 tensordict
 rsl-rl-lib>=5.0.0
 tensorboard
+imageio[ffmpeg]

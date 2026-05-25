@@ -17,7 +17,7 @@ ASSETS_DIR = os.path.join(os.path.dirname(__file__), "../../assets/robots/dodo")
 
 
 class DodoEnv:
-    def __init__(self, num_envs, env_cfg, obs_cfg, reward_cfg, command_cfg, show_viewer=False):
+    def __init__(self, num_envs, env_cfg, obs_cfg, reward_cfg, command_cfg, show_viewer=False, enable_render=False):
         self.num_envs: int = num_envs
         self.num_actions: int = env_cfg["num_actions"]
         self.cfg = env_cfg
@@ -63,6 +63,25 @@ class DodoEnv:
                 quat=env_cfg["base_init_quat"],
             )
         )
+
+        self.render_cameras = []
+        if enable_render:
+            self.render_cameras = [
+                self.scene.add_camera(
+                    res=(1280, 720),
+                    pos=(1.5, 0.0, 1.0),
+                    lookat=(0.0, 0.0, 0.4),
+                    fov=40,
+                    GUI=False,
+                ),
+                self.scene.add_camera(
+                    res=(1280, 720),
+                    pos=(0.0, 1.5, 1.0),
+                    lookat=(0.0, 0.0, 0.4),
+                    fov=40,
+                    GUI=False,
+                ),
+            ]
 
         self.scene.build(n_envs=num_envs)
 

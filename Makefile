@@ -2,7 +2,7 @@ DOCKER_REPO  ?= ultravanish/dodo-rl-genesis
 VERSION      ?= latest
 DOCKER_IMAGE  = $(DOCKER_REPO):$(VERSION)
 
-.PHONY: install assets train-local train eval tensorboard lint docker-build docker-push
+.PHONY: install assets train-local train eval tensorboard front lint docker-build docker-push
 
 install:
 	uv sync
@@ -35,6 +35,9 @@ eval:
 
 tensorboard:
 	uv run tensorboard --logdir runs/
+
+front:
+	uv run python scripts/monitor.py --log-dir runs/dodo-balance
 
 lint:
 	uv run python -m py_compile src/envs/dodo_env.py scripts/dodo_train.py && echo "OK"

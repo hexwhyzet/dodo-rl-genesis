@@ -1,0 +1,12 @@
+runs/
+checkpoints/
+assets/
+.venv/
+.git/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.DS_Store
+.env
+*.env
+wandb/

@@ -3,6 +3,7 @@ import argparse
 import os
 import pickle
 import shutil
+from pathlib import Path
 from importlib import metadata
 
 try:
@@ -18,6 +19,7 @@ import genesis as gs
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from src.envs.dodo_env import DodoEnv
+from src.streaming.video_recorder import VideoRecorder
 
 
 def get_train_cfg(exp_name):
@@ -119,9 +121,9 @@ def get_cfgs():
             "fall_penalty":       -10.0,   # penalty on termination
             "unallowed_contacts": -1.0,    # non-foot link touches ground
             "lin_vel_z":          -1.0,    # penalize vertical body movement
-            "base_ang_vel":       -2.0,    # penalize body rotation
-            "action_rate":        -0.05,   # penalize action changes (10x stronger)
-            "dof_acc":            -1e-6,   # penalize joint accelerations (4x stronger)
+            "base_ang_vel":       -0.5,    # penalize body rotation
+            "action_rate":        -0.1,    # penalize action changes
+            "dof_acc":            -1e-4,   # penalize joint accelerations
             "torques":            -2e-4,   # penalize motor effort (2x stronger)
         },
     }
@@ -146,6 +148,10 @@ def main():
     parser.add_argument("--viewer", action="store_true")
     parser.add_argument("--checkpoint", type=str, default=None,
                         help="Path to checkpoint to resume from")
+    parser.add_argument("--record", action="store_true",
+                        help="Record training videos and serve web monitor on port 8080")
+    parser.add_argument("--record-every", type=int, default=50,
+                        help="Record a video every N iterations (default: 50)")
     args = parser.parse_args()
 
     log_dir = os.path.join(os.path.dirname(__file__), f"../runs/{args.exp_name}")
@@ -173,11 +179,40 @@ def main():
         reward_cfg=reward_cfg,
         command_cfg=command_cfg,
         show_viewer=args.viewer,
+        enable_render=args.record,
     )
 
     runner = OnPolicyRunner(env, train_cfg, log_dir, device=gs.device)
     if args.checkpoint is not None:
         runner.load(args.checkpoint)
+
+    if args.record:
+        video_dir = Path(os.path.join(log_dir, "videos"))
+        recorder = VideoRecorder(
+            env=env,
+            video_dir=video_dir,
+            every_n_iter=args.record_every,
+        )
+
+        _original_step = env.step
+
+        def _step_hook(actions):
+            result = _original_step(actions)
+            recorder.on_step()
+            return result
+
+        env.step = _step_hook
+
+        _original_log = runner.logger.log
+
+        def _log_hook(**kw):
+            it = kw["it"]
+            recorder.on_iteration_start(it)
+            _original_log(**kw)
+            recorder.on_iteration_end(it)
+
+        runner.logger.log = _log_hook
+
     runner.learn(num_learning_iterations=args.max_iterations, init_at_random_ep_len=True)
 
     if args.viewer:
