@@ -12,15 +12,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tmux \
     libgl1 \
     libglib2.0-0 \
+    make \
+    vim \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+RUN curl -fsSL https://claude.ai/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
 
 RUN mkdir /var/run/sshd && \
     sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
     sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_config
 
+COPY docker/tmux.conf /root/.tmux.conf
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
