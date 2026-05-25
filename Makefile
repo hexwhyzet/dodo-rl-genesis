@@ -1,4 +1,6 @@
-.PHONY: install assets train-local train eval tensorboard lint
+DOCKER_IMAGE ?= ultravanish/dodo-rl-genesis:latest
+
+.PHONY: install assets train-local train eval tensorboard lint docker-build docker-push
 
 install:
 	uv sync
@@ -34,3 +36,9 @@ tensorboard:
 
 lint:
 	uv run python -m py_compile src/envs/dodo_env.py scripts/dodo_train.py && echo "OK"
+
+docker-build:
+	docker build -f docker/Dockerfile -t $(DOCKER_IMAGE) .
+
+docker-push:
+	docker push $(DOCKER_IMAGE)
