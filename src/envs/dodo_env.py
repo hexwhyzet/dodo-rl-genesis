@@ -186,6 +186,20 @@ class DodoEnv:
         self.torques = torch.zeros((num_envs, self.num_actions), dtype=gs.tc_float, device=gs.device)
         self.extras: dict = {}
 
+        # ------------------------------------------------------------------ frame stacking
+        self.obs_history_len = 1  # no history, obs size stays 33
+        self.single_obs_dim = 33  # ang_vel(3) + gravity(3) + commands(3) + dof_pos(8) + dof_vel(8) + actions(8)
+        self.obs_history = torch.zeros(
+            (num_envs, self.obs_history_len, self.single_obs_dim), dtype=gs.tc_float, device=gs.device
+        )
+
+        # ------------------------------------------------------------------ domain randomization
+        self.base_kp = torch.tensor(kp_list, dtype=gs.tc_float, device=gs.device)
+        self.base_kd = torch.tensor(kd_list, dtype=gs.tc_float, device=gs.device)
+        self.push_interval = 0  # 0 = disabled; enable after robot learns to walk (~1000 iters)
+        # per-env push strength seeded by gs.init(seed=...) for reproducibility
+        self.push_strength = torch.rand(num_envs, device=gs.device) * 40.0 + 10.0  # 10-50 N
+
         # ------------------------------------------------------------------ rewards
         self.reward_functions, self.episode_sums = {}, {}
         for name in list(self.reward_scales.keys()):
@@ -199,6 +213,9 @@ class DodoEnv:
 
     def _resample_commands(self, envs_idx):
         commands = gs_rand(*self.commands_limits, (self.num_envs,))
+        # 20% of resamples are stand-still commands so the robot learns to stand quietly
+        stand_mask = torch.rand(self.num_envs, device=gs.device) < 0.2
+        commands[stand_mask] = 0.0
         if envs_idx is None:
             self.commands.copy_(commands)
         else:
@@ -245,6 +262,23 @@ class DodoEnv:
         exec_actions = self.last_actions if self.simulate_action_latency else self.actions
         target_dof_pos = exec_actions * self.env_cfg["action_scale"] + self.default_dof_pos
         self.robot.control_dofs_position(target_dof_pos[:, self.actions_dof_idx], slice(6, 6 + self.num_actions))
+
+        # random push perturbation — applies force to base link every push_interval steps
+        if self.push_interval > 0:
+            push_mask = (self.episode_length_buf % self.push_interval == 0) & (self.episode_length_buf > 0)
+        if self.push_interval > 0 and push_mask.any():
+            push_idx = torch.where(push_mask)[0]
+            direction = torch.nn.functional.normalize(
+                torch.randn(len(push_idx), 3, device=gs.device) * torch.tensor([1.0, 1.0, 0.0], device=gs.device),
+                dim=1,
+            )
+            force = direction * self.push_strength[push_idx, None]
+            self.scene.rigid_solver.apply_links_external_force(
+                force=force.unsqueeze(1),
+                links_idx=[self.robot.base_link_idx],
+                envs_idx=push_idx,
+            )
+
         self.scene.step()
 
         self.episode_length_buf += 1
@@ -303,6 +337,33 @@ class DodoEnv:
         return TensorDict({"policy": self.obs_buf}, batch_size=[self.num_envs])
 
     def _reset_idx(self, envs_idx=None):
+        # domain randomization: PD gains ±20%, friction 0.5-1.5x, push strength 20-100N
+        if envs_idx is None:
+            n_reset = self.num_envs
+            dr_idx = None
+        else:
+            n_reset = int(envs_idx.sum().item())
+            dr_idx = torch.where(envs_idx)[0]
+
+        if n_reset > 0:
+            # PD gains: Genesis only supports global (1D) kp/kd, randomize on full reset
+            if dr_idx is None:
+                kp_rand = self.base_kp * (0.8 + 0.4 * torch.rand(self.num_actions, device=gs.device))
+                kd_rand = self.base_kd * (0.8 + 0.4 * torch.rand(self.num_actions, device=gs.device))
+                self.robot.set_dofs_kp(kp_rand, self.motors_dof_idx)
+                self.robot.set_dofs_kv(kd_rand, self.motors_dof_idx)
+
+            # friction randomization disabled — hurts early learning; enable after robot can walk
+            # n_links = len(self.robot.links)
+            # friction_ratio = 0.5 + torch.rand(n_reset, n_links, device=gs.device)
+            # self.robot.set_friction_ratio(friction_ratio, envs_idx=dr_idx)
+
+            new_push = torch.rand(n_reset, device=gs.device) * 80.0 + 20.0
+            if dr_idx is None:
+                self.push_strength.copy_(new_push)
+            else:
+                self.push_strength[dr_idx] = new_push
+
         self.robot.set_qpos(self.init_qpos, envs_idx=envs_idx, zero_velocity=True, skip_forward=True)
 
         if envs_idx is None:
@@ -345,10 +406,16 @@ class DodoEnv:
             else:
                 value.masked_fill_(envs_idx, 0.0)
 
+        # reset obs history for done envs
+        if envs_idx is None:
+            self.obs_history.zero_()
+        else:
+            self.obs_history.masked_fill_(envs_idx[:, None, None], 0.0)
+
         self._resample_commands(envs_idx)
 
     def _update_observation(self):
-        self.obs_buf = torch.concatenate(
+        current_obs = torch.cat(
             (
                 self.base_ang_vel * self.obs_scales["ang_vel"],               # 3
                 self.projected_gravity,                                        # 3
@@ -358,7 +425,10 @@ class DodoEnv:
                 self.actions,                                                  # 8
             ),
             dim=-1,
-        )  # total: 33
+        )  # (num_envs, 33)
+        self.obs_history = torch.roll(self.obs_history, shifts=-1, dims=1)
+        self.obs_history[:, -1] = current_obs
+        self.obs_buf = self.obs_history.reshape(self.num_envs, -1)  # (num_envs, 33*5=165)
 
     def reset(self):
         self._reset_idx()
@@ -458,7 +528,10 @@ class DodoEnv:
 
     def _reward_gait_alternation(self):
         r_contact, l_contact = self._foot_contacts()
-        return (r_contact ^ l_contact).float()
+        alternating = (r_contact ^ l_contact).float()
+        cmd_speed = torch.norm(self.commands[:, :2], dim=1)
+        weight = torch.clamp(cmd_speed / 0.3, 0.0, 1.0)
+        return alternating * weight
 
     def _reward_double_stance(self):
         r_contact, l_contact = self._foot_contacts()

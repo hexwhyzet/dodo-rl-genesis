@@ -37,7 +37,7 @@ tensorboard:
 	uv run tensorboard --logdir runs/
 
 front:
-	uv run python scripts/monitor.py --log-dir runs/dodo-balance
+	uv run python scripts/monitor.py --log-dir runs/dodo-walking
 
 lint:
 	uv run python -m py_compile src/envs/dodo_env.py scripts/dodo_train.py && echo "OK"

@@ -120,16 +120,16 @@ def get_cfgs():
         "base_height_target": 0.35,
         "reward_scales": {
             # 1. главная задача
-            "tracking_lin_vel":   1.5,
-            "tracking_ang_vel":   0.5,
+            "tracking_lin_vel":   5.0,
+            "tracking_ang_vel":   1.0,
             "heading":            0.5,
             # 2. выживание и поза
-            "alive":              2.0,
+            "alive":              0.5,
             "upright":            1.0,
             "fall_penalty":      -5.0,
             "base_height":       -40.0,
             "lin_vel_z":         -1.0,
-            "similar_to_default":-0.05,
+            "similar_to_default":-0.5,
             # 3. эффективность
             "mechanical_power":  -3e-5,
             "torques":           -0.0002,
@@ -138,8 +138,11 @@ def get_cfgs():
             # 4. контакт с землёй
             "foot_slip":         -0.05,
             "feet_impact":       -3e-6,
-            "feet_orientation":  -0.3,
+            "feet_orientation":  -0.8,
             "unallowed_contacts":-1.0,
+            # 5. походка
+            "gait_alternation":   1.0,
+            "gait_symmetry":      0.3,
         },
     }
 
@@ -217,6 +220,16 @@ def main():
     runner = OnPolicyRunner(env, train_cfg, log_dir, device=gs.device)
     if checkpoint is not None:
         runner.load(checkpoint)
+
+    # curriculum: enable push perturbations after robot learns to walk
+    _curriculum_log = runner.logger.log
+    def _curriculum_hook(**kw):
+        it = kw["it"]
+        if it >= 1000 and env.push_interval == 0:
+            env.push_interval = 150
+            print(f"[curriculum] iter {it}: push perturbations enabled (interval=150, force=10-50N)")
+        _curriculum_log(**kw)
+    runner.logger.log = _curriculum_hook
 
     if args.record:
         video_dir = Path(os.path.join(log_dir, "videos"))
