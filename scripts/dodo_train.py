@@ -3,6 +3,7 @@ import argparse
 import os
 import pickle
 import shutil
+from pathlib import Path
 from importlib import metadata
 
 try:
@@ -18,6 +19,7 @@ import genesis as gs
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from src.envs.dodo_env import DodoEnv
+from src.streaming.video_recorder import VideoRecorder
 
 
 def get_train_cfg(exp_name):
@@ -56,7 +58,7 @@ def get_train_cfg(exp_name):
             "actor": ["policy"],
             "critic": ["policy"],
         },
-        "num_steps_per_env": 24,
+        "num_steps_per_env": 48,
         "save_interval": 100,
         "run_name": exp_name,
         "logger": "tensorboard",
@@ -80,13 +82,13 @@ def get_cfgs():
         # default standing pose — vertical legs, slight knee bend for compliance
         "default_joint_angles": {
             "hip_right":       0.0,
-            "upper_leg_right": 0.0,
-            "lower_leg_right": -0.4,
-            "foot_right":      1.0,
+            "upper_leg_right": 1.32,
+            "lower_leg_right": -2.08,
+            "foot_right":      1.25,
             "hip_left":        0.0,
-            "upper_leg_left":  0.0,
-            "lower_leg_left":  -0.4,
-            "foot_left":       1.0,
+            "upper_leg_left":  1.32,
+            "lower_leg_left":  -2.08,
+            "foot_left":       1.25,
         },
         # PD gains — hips stronger, knees/ankles lighter
         "kp": [20.0, 20.0, 10.0, 10.0, 20.0, 20.0, 10.0, 10.0],
@@ -115,22 +117,37 @@ def get_cfgs():
 
     reward_cfg = {
         "tracking_sigma": 0.25,
-        "base_height_target": 0.40,  # target standing height
+        "base_height_target": 0.35,
         "reward_scales": {
-            "tracking_lin_vel":   1.0,
-            "tracking_ang_vel":   0.2,
+            # 1. главная задача
+            "tracking_lin_vel":   1.5,
+            "tracking_ang_vel":   0.5,
+            "heading":            0.5,
+            # 2. выживание и поза
+            "alive":              2.0,
+            "upright":            1.0,
+            "fall_penalty":      -5.0,
+            "base_height":       -40.0,
             "lin_vel_z":         -1.0,
-            "base_height":       -50.0,
-            "action_rate":       -0.005,
-            "similar_to_default": -0.1,
+            "similar_to_default":-0.05,
+            # 3. эффективность
+            "mechanical_power":  -3e-5,
+            "torques":           -0.0002,
+            "dof_acc":           -1e-7,
+            "action_rate":       -0.01,
+            # 4. контакт с землёй
+            "foot_slip":         -0.05,
+            "feet_impact":       -3e-6,
+            "feet_orientation":  -0.3,
+            "unallowed_contacts":-1.0,
         },
     }
 
     command_cfg = {
         "num_commands": 3,
-        "lin_vel_x_range": [0.5, 0.5],
-        "lin_vel_y_range": [0.0, 0.0],
-        "ang_vel_range":   [0.0, 0.0],
+        "lin_vel_x_range": [-0.3, 1.0],  # include standing (0) and backward
+        "lin_vel_y_range": [-0.3, 0.3],
+        "ang_vel_range":   [-0.5, 0.5],
     }
 
     return env_cfg, obs_cfg, reward_cfg, command_cfg
@@ -140,10 +157,18 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-e", "--exp_name", type=str, default="dodo-walking")
     parser.add_argument("-B", "--num_envs", type=int, default=4096)
-    parser.add_argument("--max_iterations", type=int, default=300)
+    parser.add_argument("--max_iterations", type=int, default=2000)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--cpu", action="store_true", help="Force CPU backend (useful for macOS testing)")
     parser.add_argument("--viewer", action="store_true", help="Show interactive viewer")
+    parser.add_argument("--checkpoint", type=str, default=None,
+                        help="Path to a specific checkpoint to resume from")
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume from the latest checkpoint in the run dir")
+    parser.add_argument("--record", action="store_true",
+                        help="Record training videos")
+    parser.add_argument("--record-every", type=int, default=50,
+                        help="Record a video every N iterations (default: 50)")
     args = parser.parse_args()
 
     log_dir = os.path.join(os.path.dirname(__file__), f"../runs/{args.exp_name}")
@@ -151,8 +176,20 @@ def main():
     env_cfg, obs_cfg, reward_cfg, command_cfg = get_cfgs()
     train_cfg = get_train_cfg(args.exp_name)
 
-    if os.path.exists(log_dir):
-        shutil.rmtree(log_dir)
+    # resolve checkpoint path: --checkpoint wins over --resume
+    checkpoint = args.checkpoint
+    if checkpoint is None and args.resume:
+        candidates = sorted(Path(log_dir).glob("model_*.pt"),
+                            key=lambda p: int(p.stem.split("_")[1]))
+        if not candidates:
+            raise FileNotFoundError(f"No checkpoints found in {log_dir}")
+        checkpoint = str(candidates[-1])
+        print(f"Resuming from {checkpoint}")
+
+    # don't wipe log_dir when resuming
+    if checkpoint is None:
+        if os.path.exists(log_dir):
+            shutil.rmtree(log_dir)
     os.makedirs(log_dir, exist_ok=True)
 
     with open(os.path.join(log_dir, "cfgs.pkl"), "wb") as f:
@@ -174,9 +211,40 @@ def main():
         reward_cfg=reward_cfg,
         command_cfg=command_cfg,
         show_viewer=args.viewer,
+        enable_render=args.record,
     )
 
     runner = OnPolicyRunner(env, train_cfg, log_dir, device=gs.device)
+    if checkpoint is not None:
+        runner.load(checkpoint)
+
+    if args.record:
+        video_dir = Path(os.path.join(log_dir, "videos"))
+        recorder = VideoRecorder(
+            env=env,
+            video_dir=video_dir,
+            every_n_iter=args.record_every,
+        )
+
+        _original_step = env.step
+
+        def _step_hook(actions):
+            result = _original_step(actions)
+            recorder.on_step()
+            return result
+
+        env.step = _step_hook
+
+        _original_log = runner.logger.log
+
+        def _log_hook(**kw):
+            it = kw["it"]
+            recorder.on_iteration_start(it)
+            _original_log(**kw)
+            recorder.on_iteration_end(it)
+
+        runner.logger.log = _log_hook
+
     runner.learn(num_learning_iterations=args.max_iterations, init_at_random_ep_len=True)
 
     if args.viewer:

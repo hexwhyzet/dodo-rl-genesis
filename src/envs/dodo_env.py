@@ -1,6 +1,7 @@
 import math
 import os
 
+import numpy as np
 import torch
 from tensordict import TensorDict
 
@@ -45,8 +46,8 @@ class DodoEnv:
                 max_collision_pairs=64,
             ),
             viewer_options=gs.options.ViewerOptions(
-                camera_pos=(2.0, 0.0, 2.5),
-                camera_lookat=(0.0, 0.0, 0.5),
+                camera_pos=(2.5, 0.0, 1.2),
+                camera_lookat=(0.0, 0.0, 0.4),
                 camera_fov=40,
                 max_FPS=int(1.0 / self.dt),
             ),
@@ -69,15 +70,15 @@ class DodoEnv:
             self.render_cameras = [
                 self.scene.add_camera(
                     res=(1280, 720),
-                    pos=(1.5, 0.0, 1.0),
-                    lookat=(0.0, 0.0, 0.4),
+                    pos=(1.5, 0.0, 0.7),
+                    lookat=(0.0, 0.0, 0.3),
                     fov=40,
                     GUI=False,
                 ),
                 self.scene.add_camera(
                     res=(1280, 720),
-                    pos=(0.0, 1.5, 1.0),
-                    lookat=(0.0, 0.0, 0.4),
+                    pos=(0.0, 1.5, 0.7),
+                    lookat=(0.0, 0.0, 0.3),
                     fov=40,
                     GUI=False,
                 ),
@@ -85,9 +86,14 @@ class DodoEnv:
 
         self.scene.build(n_envs=num_envs)
 
+        self.show_viewer = show_viewer
+        self._cmd_arrow_node = None
+        if show_viewer:
+            self.scene.viewer.follow_entity(self.robot, smoothing=0.5)
+        for cam in self.render_cameras:
+            cam.follow_entity(self.robot, smoothing=0.5)
+
         # ------------------------------------------------------------------ link indices
-        # Genesis merges fixed joints — foot_sole is merged into foot_right/foot_left
-        # Only foot_right and foot_left are allowed to touch the ground
         link_names = [link.name for link in self.robot.links]
         self.non_foot_link_indices = torch.tensor(
             [i for i, name in enumerate(link_names)
@@ -96,6 +102,10 @@ class DodoEnv:
         )
         self.foot_right_link = self.robot.get_link("foot_right")
         self.foot_left_link  = self.robot.get_link("foot_left")
+        self.foot_link_indices = torch.tensor(
+            [link_names.index("foot_right"), link_names.index("foot_left")],
+            dtype=torch.long, device=gs.device,
+        )
 
         # ------------------------------------------------------------------ DOF indices
         self.motors_dof_idx = torch.tensor(
@@ -110,6 +120,18 @@ class DodoEnv:
         kd_list = env_cfg["kd"] if isinstance(env_cfg["kd"], list) else [env_cfg["kd"]] * self.num_actions
         self.robot.set_dofs_kp(kp_list, self.motors_dof_idx)
         self.robot.set_dofs_kv(kd_list, self.motors_dof_idx)
+        self.kp = torch.tensor(kp_list, dtype=gs.tc_float, device=gs.device)
+        self.kd = torch.tensor(kd_list, dtype=gs.tc_float, device=gs.device)
+
+        # joint limits from URDF [hip, upper, lower, foot] × 2
+        self.dof_limits_lower = torch.tensor(
+            [-0.35, -1.57, -3.1416, -1.05, -0.35, -1.57, -3.1416, -1.05],
+            dtype=gs.tc_float, device=gs.device,
+        )
+        self.dof_limits_upper = torch.tensor(
+            [0.35, 1.57, 1.3963, 1.57, 0.35, 1.57, 1.3963, 1.57],
+            dtype=gs.tc_float, device=gs.device,
+        )
 
         # ------------------------------------------------------------------ constants
         self.global_gravity = torch.tensor([0.0, 0.0, -1.0], dtype=gs.tc_float, device=gs.device)
@@ -158,6 +180,10 @@ class DodoEnv:
         self.base_pos = torch.empty((num_envs, 3), dtype=gs.tc_float, device=gs.device)
         self.base_quat = torch.empty((num_envs, 4), dtype=gs.tc_float, device=gs.device)
         self.base_euler = torch.empty((num_envs, 3), dtype=gs.tc_float, device=gs.device)
+        n_links = len(self.robot.links)
+        self.contact_forces      = torch.zeros((num_envs, n_links, 3), dtype=gs.tc_float, device=gs.device)
+        self.last_contact_forces = torch.zeros((num_envs, n_links, 3), dtype=gs.tc_float, device=gs.device)
+        self.torques = torch.zeros((num_envs, self.num_actions), dtype=gs.tc_float, device=gs.device)
         self.extras: dict = {}
 
         # ------------------------------------------------------------------ rewards
@@ -177,6 +203,40 @@ class DodoEnv:
             self.commands.copy_(commands)
         else:
             torch.where(envs_idx[:, None], commands, self.commands, out=self.commands)
+
+        if self.show_viewer or self.render_cameras:
+            self._draw_command_arrow()
+
+    def _draw_command_arrow(self):
+        try:
+            cmd = self.commands[0].cpu().numpy()
+            q   = self.base_quat[0].cpu().numpy()
+            pos = self.base_pos[0].cpu().numpy()
+
+            vx, vy = float(cmd[0]), float(cmd[1])
+            yaw = math.atan2(2.0 * (q[0]*q[3] + q[1]*q[2]),
+                             1.0 - 2.0 * (q[2]**2 + q[3]**2))
+            world_vx = vx * math.cos(yaw) - vy * math.sin(yaw)
+            world_vy = vx * math.sin(yaw) + vy * math.cos(yaw)
+            speed = math.sqrt(world_vx**2 + world_vy**2)
+
+            ctx = self.scene._visualizer.context
+            if self._cmd_arrow_node is not None:
+                ctx.clear_external_node(self._cmd_arrow_node)
+                self._cmd_arrow_node = None
+
+            if speed < 0.05:
+                return
+
+            scale = 0.8 / speed
+            vec = np.array([world_vx * scale, world_vy * scale, 0.0], dtype=np.float32)
+            arrow_pos = np.array([pos[0], pos[1], pos[2] + 0.1], dtype=np.float32)
+
+            self._cmd_arrow_node = self.scene.draw_debug_arrow(
+                pos=arrow_pos, vec=vec, radius=0.02, color=(0.2, 0.8, 0.2, 0.9),
+            )
+        except Exception as e:
+            print(f"[arrow] ERROR: {e}")
 
     # ---------------------------------------------------------------------- step / reset
 
@@ -200,6 +260,12 @@ class DodoEnv:
         self.dof_pos = self.robot.get_dofs_position(self.motors_dof_idx)
         self.dof_vel = self.robot.get_dofs_velocity(self.motors_dof_idx)
 
+        pos_error = self.actions * self.env_cfg["action_scale"] - (self.dof_pos - self.default_dof_pos)
+        self.torques = self.kp * pos_error - self.kd * self.dof_vel
+
+        self.last_contact_forces.copy_(self.contact_forces)
+        self.contact_forces = self.robot.get_links_net_contact_force()
+
         # termination computed BEFORE rewards so fall_penalty fires correctly
         timed_out = self.episode_length_buf > self.max_episode_length
         fell = (
@@ -207,8 +273,7 @@ class DodoEnv:
             | (torch.abs(self.base_euler[:, 0]) > self.env_cfg["termination_if_roll_greater_than"])
             | self.scene.rigid_solver.get_error_envs_mask()
         )
-        contact_forces = self.robot.get_links_net_contact_force()
-        non_foot_forces = contact_forces[:, self.non_foot_link_indices, :]
+        non_foot_forces = self.contact_forces[:, self.non_foot_link_indices, :]
         bad_contact = torch.any(torch.norm(non_foot_forces, dim=-1) > 1.0, dim=1)
 
         # self-collision: any link touching another link of the same robot
@@ -353,23 +418,90 @@ class DodoEnv:
         return (self.reset_buf & ~timed_out).float()
 
     def _reward_torques(self):
-        # PD torque estimate: kp * pos_error - kd * vel
-        kp = torch.tensor(self.env_cfg["kp"], dtype=gs.tc_float, device=gs.device)
-        kd = torch.tensor(self.env_cfg["kd"], dtype=gs.tc_float, device=gs.device)
-        pos_error = self.actions * self.env_cfg["action_scale"] - (self.dof_pos - self.default_dof_pos)
-        torques = kp * pos_error - kd * self.dof_vel
-        return torch.sum(torch.square(torques), dim=1)
+        return torch.sum(torch.square(self.torques), dim=1)
 
     def _reward_dof_acc(self):
-        # penalize joint accelerations
         return torch.sum(torch.square((self.dof_vel - self.last_dof_vel) / self.dt), dim=1)
 
     def _reward_base_ang_vel(self):
-        # penalize any body rotation (want to stand still)
         return torch.sum(torch.square(self.base_ang_vel), dim=1)
 
+    def _reward_lateral_motion(self):
+        return torch.square(self.base_lin_vel[:, 1])
+
+    def _reward_mechanical_power(self):
+        return torch.sum(torch.abs(self.torques * self.dof_vel), dim=1)
+
+    def _foot_contacts(self):
+        foot_forces = self.contact_forces[:, self.foot_link_indices, :]
+        r = torch.norm(foot_forces[:, 0, :], dim=-1) > 1.0
+        l = torch.norm(foot_forces[:, 1, :], dim=-1) > 1.0
+        return r, l
+
+    def _reward_foot_slip(self):
+        r_contact, l_contact = self._foot_contacts()
+        slip_r = torch.norm(self.foot_right_link.get_vel()[:, :2], dim=1) * r_contact.float()
+        slip_l = torch.norm(self.foot_left_link.get_vel()[:, :2], dim=1) * l_contact.float()
+        return slip_r + slip_l
+
+    def _reward_feet_impact(self):
+        curr = self.contact_forces[:, self.foot_link_indices, :]
+        prev = self.last_contact_forces[:, self.foot_link_indices, :]
+        delta = torch.norm(curr - prev, dim=-1)
+        return torch.sum(delta, dim=1)
+
+    def _reward_step_length(self):
+        r_contact, l_contact = self._foot_contacts()
+        fwd_r = self.foot_right_link.get_vel()[:, 0] * (~r_contact).float()
+        fwd_l = self.foot_left_link.get_vel()[:, 0]  * (~l_contact).float()
+        return torch.clamp(fwd_r + fwd_l, min=0.0)
+
+    def _reward_gait_alternation(self):
+        r_contact, l_contact = self._foot_contacts()
+        return (r_contact ^ l_contact).float()
+
+    def _reward_double_stance(self):
+        r_contact, l_contact = self._foot_contacts()
+        both = (r_contact & l_contact).float()
+        speed = torch.norm(self.base_lin_vel[:, :2], dim=1)
+        return both * torch.clamp(speed - 0.3, min=0.0)
+
+    def _reward_excessive_flight(self):
+        r_contact, l_contact = self._foot_contacts()
+        return (~r_contact & ~l_contact).float()
+
+    def _reward_joint_limits(self):
+        margin = 0.1
+        below = torch.clamp(self.dof_limits_lower + margin - self.dof_pos, min=0.0)
+        above = torch.clamp(self.dof_pos - (self.dof_limits_upper - margin), min=0.0)
+        return torch.sum(below + above, dim=1)
+
+    def _reward_gait_symmetry(self):
+        # sagittal joints should be anti-phase: right ≈ -left
+        right = self.dof_pos[:, 1:4]  # upper, lower, foot right
+        left  = self.dof_pos[:, 5:8]  # upper, lower, foot left
+        anti_sym_err = torch.sum(torch.square(right + left), dim=1)
+        return torch.exp(-anti_sym_err / 0.5)
+
+    def _reward_heading(self):
+        # reward aligning body heading with world-frame velocity direction
+        # only meaningful when actually moving
+        world_vel = self.robot.get_vel()[:, :2]  # (n_envs, 2) world XY velocity
+        speed = torch.norm(world_vel, dim=1)
+
+        # robot forward direction in world: rotate body X=[1,0,0] by base_quat
+        body_x = torch.zeros((self.num_envs, 3), dtype=gs.tc_float, device=gs.device)
+        body_x[:, 0] = 1.0
+        world_forward = transform_by_quat(body_x, self.base_quat)[:, :2]
+
+        # cos(angle between velocity and heading): 1=aligned, -1=opposite
+        vel_dir = world_vel / (speed.unsqueeze(1) + 1e-6)
+        fwd_norm = world_forward / (torch.norm(world_forward, dim=1, keepdim=True) + 1e-6)
+        alignment = torch.sum(vel_dir * fwd_norm, dim=1)
+
+        # only apply when moving fast enough to have a meaningful direction
+        return torch.where(speed > 0.2, alignment, torch.zeros_like(speed))
+
     def _reward_unallowed_contacts(self):
-        # penalize any contact force on non-foot_sole links
-        forces = self.robot.get_links_net_contact_force()  # (n_envs, n_links, 3)
-        non_foot_forces = forces[:, self.non_foot_link_indices, :]
+        non_foot_forces = self.contact_forces[:, self.non_foot_link_indices, :]
         return torch.any(torch.norm(non_foot_forces, dim=-1) > 1.0, dim=1).float()
