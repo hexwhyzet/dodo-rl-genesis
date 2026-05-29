@@ -226,15 +226,20 @@ class DodoEnv:
 
     def _draw_command_arrow(self):
         try:
-            cmd = self.commands[0].cpu().numpy()
-            q   = self.base_quat[0].cpu().numpy()
             pos = self.base_pos[0].cpu().numpy()
 
-            vx, vy = float(cmd[0]), float(cmd[1])
-            yaw = math.atan2(2.0 * (q[0]*q[3] + q[1]*q[2]),
-                             1.0 - 2.0 * (q[2]**2 + q[3]**2))
-            world_vx = vx * math.cos(yaw) - vy * math.sin(yaw)
-            world_vy = vx * math.sin(yaw) + vy * math.cos(yaw)
+            # use world-frame command if available (set by gamepad), else convert from body
+            if hasattr(self, '_world_cmd'):
+                world_vx, world_vy = self._world_cmd
+            else:
+                cmd = self.commands[0].cpu().numpy()
+                q   = self.base_quat[0].cpu().numpy()
+                vx, vy = float(cmd[0]), float(cmd[1])
+                yaw = math.atan2(2.0 * (q[0]*q[3] + q[1]*q[2]),
+                                 1.0 - 2.0 * (q[2]**2 + q[3]**2))
+                world_vx = vx * math.cos(yaw) - vy * math.sin(yaw)
+                world_vy = vx * math.sin(yaw) + vy * math.cos(yaw)
+
             speed = math.sqrt(world_vx**2 + world_vy**2)
 
             ctx = self.scene._visualizer.context
@@ -245,12 +250,12 @@ class DodoEnv:
             if speed < 0.05:
                 return
 
-            scale = 0.8 / speed
+            scale = 0.5  # 0.5m per 1 m/s — arrow length proportional to speed
             vec = np.array([world_vx * scale, world_vy * scale, 0.0], dtype=np.float32)
-            arrow_pos = np.array([pos[0], pos[1], pos[2] + 0.1], dtype=np.float32)
+            arrow_pos = np.array([pos[0], pos[1], pos[2] + 0.3], dtype=np.float32)
 
             self._cmd_arrow_node = self.scene.draw_debug_arrow(
-                pos=arrow_pos, vec=vec, radius=0.02, color=(0.2, 0.8, 0.2, 0.9),
+                pos=arrow_pos, vec=vec, radius=0.012, color=(0.15, 0.9, 0.4, 0.85),
             )
         except Exception as e:
             print(f"[arrow] ERROR: {e}")

@@ -2,7 +2,7 @@ DOCKER_REPO  ?= ultravanish/dodo-rl-genesis
 VERSION      ?= latest
 DOCKER_IMAGE  = $(DOCKER_REPO):$(VERSION)
 
-.PHONY: install assets train-local train eval tensorboard front lint docker-build docker-push
+.PHONY: install assets train-local train eval tensorboard front lint docker-build docker-push play
 
 install:
 	uv sync
@@ -29,6 +29,9 @@ balance:
 balance-resume:
 	uv run python scripts/dodo_balance.py -B 4096 --max_iterations 3000 \
 		--checkpoint $(shell ls -t runs/dodo-balance/*.pt 2>/dev/null | head -1)
+
+play:
+	uv run python scripts/gamepad_play.py --checkpoint $(CHECKPOINT) --cpu
 
 eval:
 	uv run python scripts/eval.py --checkpoint $(CHECKPOINT)

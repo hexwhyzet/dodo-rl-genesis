@@ -10,6 +10,7 @@ dependencies = [
     "rsl-rl-lib>=5.0.0",
     "tensorboard",
     "imageio[ffmpeg]",
+    "pygame>=2.5",
 ]
 
 [project.optional-dependencies]
